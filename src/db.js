@@ -10,6 +10,7 @@ types.setTypeParser(20, (val) => parseInt(val, 10));
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgres://wallet:wallet@localhost:5432/wallet',
   max: 20,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 });
 
 async function runMigrations() {
