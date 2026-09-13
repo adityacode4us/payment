@@ -87,13 +87,26 @@ router.post('/', async (req, res) => {
       throw err;
     }
 
-    // Gate 3: Conditional debit — atomic, no lost updates, no overdraft
-    const debitResult = await client.query(
-      'UPDATE wallets SET balance = balance - $1 WHERE id = $2 AND balance >= $1',
-      [amount_paise, from]
-    );
+    // Gate 3: Deterministic lock ordering to prevent deadlock on concurrent cross-transfers (A->B and B->A)
+    // Always lock both rows in ascending order of UUID.
+    const lockQuery = `
+      SELECT id, balance 
+      FROM wallets 
+      WHERE id IN ($1, $2) 
+      ORDER BY id ASC 
+      FOR UPDATE
+    `;
+    const lockResult = await client.query(lockQuery, [from, to]);
 
-    if (debitResult.rowCount === 0) {
+    if (lockResult.rows.length < 2) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'one or both wallets not found' });
+    }
+
+    const senderWallet = lockResult.rows.find((w) => w.id === from);
+    const senderBalance = Number(senderWallet.balance);
+
+    if (senderBalance < amount_paise) {
       // Insufficient funds — mark as declined and commit
       await client.query(
         "UPDATE transfers SET status = 'declined' WHERE id = $1",
@@ -109,7 +122,12 @@ router.post('/', async (req, res) => {
       return res.status(200).json(transferRow);
     }
 
-    // Credit the receiver
+    // Both rows locked in deterministic order: execute debit & credit safely
+    await client.query(
+      'UPDATE wallets SET balance = balance - $1 WHERE id = $2',
+      [amount_paise, from]
+    );
+
     await client.query(
       'UPDATE wallets SET balance = balance + $1 WHERE id = $2',
       [amount_paise, to]

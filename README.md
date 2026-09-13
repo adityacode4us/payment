@@ -20,6 +20,7 @@ The service will be available at `http://localhost:8080`.
 |--------|------|-------------|------|
 | POST | `/wallets` | Get-or-create wallet | Bearer token |
 | GET | `/wallets/:id` | Get wallet balance | Bearer token |
+| POST | `/wallets/:id/deposit` | Deposit funds (seed) | Bearer token |
 | POST | `/transfers` | Create transfer | Bearer token |
 | GET | `/transfers/:id` | Get transfer status | Bearer token |
 | GET | `/health` | Health check | None |

@@ -9,24 +9,32 @@ Two tables in PostgreSQL:
 
 Money is always **integer paise** — never floats, never rupees-as-decimal. `BIGINT` handles amounts up to ₹92 quadrillion.
 
-## Simplest-Correct Mechanism: Conditional UPDATE
+## The Mechanism for Conservation & Deadlock-Free No-Overdraft
 
-**Chosen:** Atomic conditional debit — `UPDATE wallets SET balance = balance - $amount WHERE id = $id AND balance >= $amount`. If `rowCount = 0`, the transfer is declined (insufficient funds).
+**Chosen: Deterministic Sorted Row Locking (`SELECT ... FOR UPDATE ORDER BY id ASC`)**
 
-**Why it's the simplest correct approach:**
-- Single-row atomic operation — no explicit row locking, no deadlock possible.
-- `balance = balance - amount` happens inside the UPDATE; we never read-modify-write in application code, so there are no lost updates.
-- The `WHERE balance >= amount` check and the debit are atomic within one statement.
+To guarantee consistency and avoid deadlocks across concurrent transfers (including simultaneous $A \rightarrow B$ and $B \rightarrow A$ transfers), both wallet rows are locked in a strict, globally sorted order before any debit or credit:
+
+```sql
+SELECT id, balance 
+FROM wallets 
+WHERE id IN ($from, $to) 
+ORDER BY id ASC 
+FOR UPDATE;
+```
+
+**Why this is the robust, deadlock-free solution:**
+1. **Mathematical Deadlock Immunity:** Any two transactions that touch wallets $A$ and $B$ (whether $A \rightarrow B$ or $B \rightarrow A$) will query and acquire row-level exclusive locks in the exact same sequence (`min(A, B)` then `max(A, B)`). Because lock acquisition direction is globally invariant, circular waits are impossible.
+2. **Atomicity & No Lost Updates:** While the locks are held, the sender balance is verified. If sufficient, sender is debited and receiver is credited, and the transaction commits. No concurrent transaction can alter or read intermediate balances.
+3. **Clean Declines:** If sender balance is insufficient, the transfer row is marked `declined` and committed cleanly. No money is moved.
 
 **Rejected alternatives:**
 
 | Alternative | Why Rejected |
 |---|---|
-| `SELECT ... FOR UPDATE` with sorted lock order | Correct, but heavier: requires deterministic lock ordering logic (lock lower wallet ID first), holds locks longer, more complex code. Overkill when a single conditional UPDATE suffices. |
-| Serializable isolation | Correct, but causes serialization failures (`ERROR: could not serialize access`) under contention, requiring application-level retry loops. Added complexity for no benefit over conditional UPDATE. |
-| App-level read → subtract → write | **Broken.** Classic lost-update: two concurrent reads see the same balance, both subtract, one write overwrites the other. Money created or destroyed. |
-
-**Deadlock avoidance:** Since each transfer uses single-row UPDATEs (debit then credit), and PostgreSQL's row-level locks on individual UPDATE statements are released at commit, there is no two-row lock-ordering problem. Two concurrent A→B and B→A transfers cannot deadlock because neither holds two row locks simultaneously in a way that creates a cycle.
+| Naive Unsorted `UPDATE` / `SELECT ... FOR UPDATE` | **Deadlock hazard.** If $A \rightarrow B$ debits $A$ first then credits $B$, and concurrent $B \rightarrow A$ debits $B$ first then credits $A$, transactions cyclicly wait on each other, triggering PostgreSQL `40P01` deadlock aborts under contention storms. |
+| Serializable Isolation (`ISOLATION LEVEL SERIALIZABLE`) | Correct, but causes frequent serialization failures (`ERROR: could not serialize access`) under contention, requiring complex application retry loops and high overhead compared to deterministic locking. |
+| App-level Read-Modify-Write | **Broken.** Classic lost-update: two concurrent threads read balance, subtract locally, and overwrite each other, creating or destroying money. |
 
 ## Where Idempotency Lives
 

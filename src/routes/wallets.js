@@ -61,4 +61,35 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// POST /wallets/:id/deposit — add funds to a wallet (for seeding/testing)
+router.post('/:id/deposit', async (req, res) => {
+  try {
+    const { amount_paise } = req.body;
+    if (!amount_paise || typeof amount_paise !== 'number' || amount_paise <= 0 || !Number.isInteger(amount_paise)) {
+      return res.status(400).json({ error: 'amount_paise must be a positive integer' });
+    }
+
+    const result = await pool.query(
+      'UPDATE wallets SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, created_at',
+      [amount_paise, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'wallet not found' });
+    }
+
+    logger.info({
+      event: 'wallet.deposited',
+      correlation_id: req.correlationId,
+      wallet_id: req.params.id,
+      amount_paise,
+    }, 'funds deposited');
+
+    res.status(200).json(result.rows[0]);
+  } catch (err) {
+    logger.error({ error: err.message, correlation_id: req.correlationId }, 'deposit failed');
+    res.status(500).json({ error: 'internal server error' });
+  }
+});
+
 module.exports = router;
