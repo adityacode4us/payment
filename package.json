@@ -1,0 +1,17 @@
+{
+  "name": "wallet-service",
+  "version": "1.0.0",
+  "description": "Wallet & P2P Transfer Service",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.12.0",
+    "uuid": "^9.0.0",
+    "prom-client": "^15.1.0",
+    "pino": "^8.19.0"
+  }
+}

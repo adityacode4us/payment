@@ -1,0 +1,7 @@
+node_modules
+.git
+*.md
+!README.md
+*.pdf
+01-wallet-transfer-*
+R2-exercise-bank.pdf
